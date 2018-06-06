@@ -16,5 +16,9 @@
 .project
 nb-configuration.xml
 .vscode
-
+*.iml
+.idea
 /codeDumper/target/
+.sts4-cache
+/jsesh-new-installer/target/
+/signInfoAppli/target/

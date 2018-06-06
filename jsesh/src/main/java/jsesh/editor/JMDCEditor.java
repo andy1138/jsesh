@@ -312,8 +312,6 @@ public class JMDCEditor extends JPanel {
                 .getLocalGraphicsEnvironment()
                 .getScreenDevices();       
         Graphics2D g2d = (Graphics2D) g;
-//        System.err.println(g2d.getDeviceConfiguration()
-//                .getNormalizingTransform().getScaleX());
         GraphicsUtils.antialias(g2d);
         g2d.scale(scale, scale);
 
@@ -348,6 +346,7 @@ public class JMDCEditor extends JPanel {
         }
 
     }
+
 
     public java.util.List<MDCPosition> doSearch(MdCSearchQuery query) {
         return getHieroglyphicTextModel().doSearch(query);
@@ -409,6 +408,12 @@ public class JMDCEditor extends JPanel {
     }
 
 
+    public void setInsertPosition(int insertPosition) {
+        // TODO : this is WAAYYY too convoluted. 
+        MDCPosition mdcPosition= getHieroglyphicTextModel().buildPosition(insertPosition);
+        getWorkflow().setCursor(mdcPosition);
+    }
+    
     /**
      * @return the current insertion position.
      */
@@ -672,7 +677,7 @@ public class JMDCEditor extends JPanel {
      * format.
      *
      * @param mdcText
-     * @throws a RuntimeException encapsulating a MDCSyntaxError
+     * @throws RuntimeException encapsulating a MDCSyntaxError
      */
     public void setMDCText(String mdcText) {
         try {
