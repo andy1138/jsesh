@@ -33,12 +33,13 @@ knowledge of the CeCILL license and that you accept its terms.
  */
 package jsesh.jhotdraw;
 
-import jsesh.jhotdraw.search.CorpusSearchPresenter;
 import jsesh.jhotdraw.utils.ComponentMenuActionChecker;
 import jsesh.jhotdraw.viewClass.JSeshView;
 import java.awt.Component;
 import java.awt.datatransfer.DataFlavor;
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.*;
 
 import javax.swing.Action;
 import javax.swing.ActionMap;
@@ -48,13 +49,13 @@ import javax.swing.filechooser.FileFilter;
 import jsesh.editor.JMDCEditor;
 import jsesh.editor.MDCModelTransferableBroker;
 import jsesh.glossary.JGlossaryEditor;
-import jsesh.graphics.export.EMFExporter;
-import jsesh.graphics.export.EPSExporter;
-import jsesh.graphics.export.HTMLExporter;
-import jsesh.graphics.export.MacPictExporter;
-import jsesh.graphics.export.RTFExportPreferences;
-import jsesh.graphics.export.SVGExporter;
-import jsesh.graphics.export.WMFExporter;
+import jsesh.graphics.export.emf.EMFExporter;
+import jsesh.graphics.export.eps.EPSExporter;
+import jsesh.graphics.export.html.HTMLExporter;
+import jsesh.graphics.export.macpict.MacPictExporter;
+import jsesh.graphics.export.rtf.RTFExportPreferences;
+import jsesh.graphics.export.svg.SVGExporter;
+import jsesh.graphics.export.wmf.WMFExporter;
 import jsesh.graphics.export.pdfExport.PDFExportPreferences;
 import jsesh.jhotdraw.actions.BundleHelper;
 import jsesh.jhotdraw.actions.JSeshApplicationActionsID;
@@ -81,6 +82,7 @@ import jsesh.jhotdraw.actions.file.ImportRTFAction;
 import jsesh.jhotdraw.actions.file.QuickPDFExportAction;
 import jsesh.jhotdraw.actions.file.QuickPDFSelectExportFolderAction;
 import jsesh.jhotdraw.actions.file.SetAsModelAction;
+import jsesh.jhotdraw.actions.generic.ViewOpenerWorker;
 import jsesh.jhotdraw.actions.help.JSeshHelpAction;
 import jsesh.jhotdraw.actions.text.EditGroupAction;
 import jsesh.jhotdraw.actions.text.InsertElementAction;
@@ -89,13 +91,16 @@ import jsesh.jhotdraw.actions.windows.ToggleGlyphPaletteAction;
 import jsesh.jhotdraw.applicationPreferences.model.ExportPreferences;
 import jsesh.jhotdraw.applicationPreferences.model.FontInfo;
 import jsesh.jhotdraw.applicationPreferences.ui.ApplicationPreferencesPresenter;
+import jsesh.jhotdraw.dialogs.CorpusSearchDialogFrame;
 import jsesh.jhotdraw.jhotdrawCustom.QenherkhURIChooser;
+import jsesh.jhotdraw.utils.WindowsHelper;
 import jsesh.mdc.constants.SymbolCodes;
 import jsesh.mdc.model.TopItemList;
 import jsesh.mdcDisplayer.clipboard.JSeshPasteFlavors;
 import jsesh.mdcDisplayer.clipboard.MDCClipboardPreferences;
 import jsesh.mdcDisplayer.clipboard.MDCModelTransferable;
 import jsesh.mdcDisplayer.preferences.DrawingSpecification;
+import jsesh.search.clientApi.CorpusSearchHit;
 import jsesh.swing.signPalette.HieroglyphPaletteListener;
 import jsesh.swing.signPalette.PalettePresenter;
 
@@ -165,7 +170,7 @@ public class JSeshApplicationModel extends DefaultApplicationModel {
     /**
      * Some actions require a knowledge of the application...
      */
-    private Application application;
+    private ActiveViewAwareApplication application;
 
     /**
      * Everything which is a) application-level and b) non specific to JHotdraw
@@ -179,16 +184,17 @@ public class JSeshApplicationModel extends DefaultApplicationModel {
     private final MyTransferableBroker transferableBroker = new MyTransferableBroker();
 
     private PalettePresenter palettePresenter;
-    private CorpusSearchPresenter corpusSearchPresenter;
 
     private JGlossaryEditor glossaryEditor;
+    
+    private boolean canOpenNewView = true;
 
     @Override
     public void initApplication(Application a) {
         super.initApplication(a);
-        this.application = a;
-        ((ActiveViewAwareApplication) a).initSecondaryWindow(palettePresenter.getDialog());
-        ((ActiveViewAwareApplication) a).initSecondaryWindow(corpusSearchPresenter.getDialog());
+        this.application = (ActiveViewAwareApplication) a;
+        this.application.initSecondaryWindow(palettePresenter.getDialog());
+        this.application.initSecondaryWindow(new CorpusSearchDialogFrame(hit -> showCorpusSearchHit(hit)));
     }
 
     /*
@@ -247,11 +253,9 @@ public class JSeshApplicationModel extends DefaultApplicationModel {
             map.put(ImportNewSignAction.ID, new ImportNewSignAction(a));
             map.put(JSeshHelpAction.ID, new JSeshHelpAction(a));
             // Corpus search...
-            corpusSearchPresenter= new CorpusSearchPresenter((ActiveViewAwareApplication)a);
-            map.put(FindInFolderAction.ID, new FindInFolderAction((ActiveViewAwareApplication)a, corpusSearchPresenter));
+            map.put(FindInFolderAction.ID, new FindInFolderAction((ActiveViewAwareApplication) a, hit -> showCorpusSearchHit(hit)));
 
             // palette ...
-
             palettePresenter = new PalettePresenter();
             palettePresenter.setHieroglyphPaletteListener(new MyHieroglyphicPaletteListener());
 
@@ -273,13 +277,13 @@ public class JSeshApplicationModel extends DefaultApplicationModel {
             map.remove(SelectAllAction.ID);
             map.remove(ClearSelectionAction.ID);
             // Find is application-level (because form is shared).
-            
+
             map.put(FindAction.ID, new FindAction(a));
 
         } else {
             // View level actions
             map.put(SelectAllAction.ID, new JSeshSelectAllAction(a, jseshView));
-            map.put(ClearSelectionAction.ID, new JSeshClearSelectionAction(a, jseshView));            
+            map.put(ClearSelectionAction.ID, new JSeshClearSelectionAction(a, jseshView));
             map.put(FindNextAction.ID, new FindNextAction(a, v));
             map.put(ExportAsBitmapAction.ID, new ExportAsBitmapAction(a, v));
             map.put(EditDocumentPreferencesAction.ID,
@@ -291,7 +295,7 @@ public class JSeshApplicationModel extends DefaultApplicationModel {
                             JSeshApplicationActionsID.EXPORT_WMF));
 
             map.put(JSeshApplicationActionsID.EXPORT_EMF,
-                    new GenericExportAction(a, jseshView, new EMFExporter(),
+                    new GenericExportAction(a, jseshView, new EMFExporter(a.getComponent()),
                             JSeshApplicationActionsID.EXPORT_EMF));
 
             map.put(JSeshApplicationActionsID.EXPORT_MACPICT,
@@ -304,7 +308,7 @@ public class JSeshApplicationModel extends DefaultApplicationModel {
                             JSeshApplicationActionsID.EXPORT_SVG));
 
             map.put(JSeshApplicationActionsID.EXPORT_EPS,
-                    new GenericExportAction(a, jseshView, new EPSExporter(),
+                    new GenericExportAction(a, jseshView, new EPSExporter(a.getComponent()),
                             JSeshApplicationActionsID.EXPORT_EPS));
 
             map.put(ExportAsPDFAction.ID, new ExportAsPDFAction(a, jseshView));
@@ -399,8 +403,8 @@ public class JSeshApplicationModel extends DefaultApplicationModel {
     }
 
     /**
-     * Manages the palette.
-     * This is done at application level, as the palette is used by all views.
+     * Manages the palette. This is done at application level, as the palette is
+     * used by all views.
      */
     private class MyHieroglyphicPaletteListener implements
             HieroglyphPaletteListener {
@@ -420,7 +424,7 @@ public class JSeshApplicationModel extends DefaultApplicationModel {
     /**
      * @param exportType
      * @see
-     * jsesh.jhotdraw.JSeshApplicationBase#selectCopyPasteConfiguration(int)
+     * jsesh.jhotdraw.JSeshApplicationBase#selectCopyPasteConfiguration(ExportType)
      */
     public void selectCopyPasteConfiguration(ExportType exportType) {
         jseshBase.selectCopyPasteConfiguration(exportType);
@@ -535,6 +539,7 @@ public class JSeshApplicationModel extends DefaultApplicationModel {
 
         }
 
+        @Override
         public MDCModelTransferable buildTransferable(TopItemList top,
                 DataFlavor[] dataFlavors) {
 
@@ -570,4 +575,53 @@ public class JSeshApplicationModel extends DefaultApplicationModel {
         return glossaryEditor;
     }
 
+    private void showCorpusSearchHit(final CorpusSearchHit hit) {
+        Path hitPath = hit.getFile();
+        JSeshView selectedView = null;
+        for (View view : application.views()) {
+            if (view.getURI() == null) {
+                continue; // We don't try (for the moment) to load the document 
+            } // in the existing view... it might contain unsaved data. 
+            Path viewPath = Paths.get(view.getURI());
+            try {
+                if (Files.isSameFile(viewPath, hitPath)) {
+                    System.out.println("FOUND " + viewPath);
+                    selectedView = (JSeshView) view;
+                }
+            } catch (IOException e) {
+                e.printStackTrace(); // Don't stop for this, but display just in case.
+            }
+        }
+        if (selectedView == null) {
+            if (canOpenNewView) { // Else, nothing... do it later.
+                canOpenNewView = false;
+                View newView
+                        = application.createView();
+                application.add(newView);
+                newView.setEnabled(false);
+                application.show(newView);
+                application.setActiveView(newView);
+                newView.execute(new ViewOpenerWorker(hit.getFile().toUri(), newView, application) {
+                    // When the file is loaded, move to the correct position.
+                    @Override
+                    protected void done(Object value) {
+                        super.done(value);
+                        JSeshView v = (JSeshView) newView;
+                        v.getEditor().setInsertPosition(hit.getPosition());
+                        canOpenNewView
+                                = true;
+                    }
+                });
+            }
+        } else {
+// TODO : reorganize MDCPosition. It's too tightly coupled to the text. 
+            if (selectedView.isEnabled()) {
+                selectedView.setEnabled(false);
+                application.show(selectedView);
+                WindowsHelper.toFront(selectedView);
+                selectedView.getEditor().setInsertPosition(hit.getPosition());
+                selectedView.setEnabled(true);
+            }
+        }
+    }
 }
